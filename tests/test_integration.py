@@ -37,26 +37,44 @@ TAG = f"mcp-it-{RUN}"
 LIST = f"MCP IT {RUN}"
 
 
-@pytest.fixture
-async def mcp_client() -> AsyncIterator[Client[Any]]:
-    async with Client(create_server(Settings.load())) as c:
-        yield c
-    await cleanup()
-
-
-async def cleanup() -> None:
-    """Remove what the tools cannot: the test's tags and lists (and any stray bookmarks)."""
+def karakeep_api() -> httpx.AsyncClient:
     settings = Settings.load()
     assert settings.karakeep_api_key
     headers = {"Authorization": f"Bearer {settings.karakeep_api_key.get_secret_value()}"}
-    async with httpx.AsyncClient(
-        base_url=f"{settings.karakeep_url}/api/v1", headers=headers
-    ) as http:
+    return httpx.AsyncClient(base_url=f"{settings.karakeep_url}/api/v1", headers=headers)
+
+
+async def all_tags(http: httpx.AsyncClient) -> list[dict[str, Any]]:
+    tags: list[dict[str, Any]] = []
+    cursor = None
+    while True:
+        params = {"limit": 200} | ({"cursor": cursor} if cursor else {})
+        page = (await http.get("/tags", params=params)).json()
+        tags += page["tags"]
+        cursor = page.get("nextCursor")
+        if not cursor:
+            return tags
+
+
+@pytest.fixture
+async def mcp_client() -> AsyncIterator[Client[Any]]:
+    async with karakeep_api() as http:
+        before = {t["id"] for t in await all_tags(http)}
+    async with Client(create_server(Settings.load())) as c:
+        yield c
+    await cleanup(before)
+
+
+async def cleanup(tags_before: set[str]) -> None:
+    """Remove what the tools cannot: the test's tags and lists, tags Karakeep's AI
+    created for the test bookmarks, and any bookmarks a failed test left behind."""
+    async with karakeep_api() as http:
         found = await http.get("/bookmarks/search", params={"q": f"#{TAG}", "limit": 50})
         for b in found.json().get("bookmarks", []):
             await http.delete(f"/bookmarks/{b['id']}")
-        for t in (await http.get("/tags", params={"nameContains": RUN})).json()["tags"]:
-            await http.delete(f"/tags/{t['id']}")
+        for t in await all_tags(http):
+            if RUN in t["name"] or (t["id"] not in tags_before and t["numBookmarks"] == 0):
+                await http.delete(f"/tags/{t['id']}")
         for lst in (await http.get("/lists")).json()["lists"]:
             if RUN in lst["name"]:
                 await http.delete(f"/lists/{lst['id']}")
@@ -76,6 +94,16 @@ async def eventually(check: Callable[[], Awaitable[bool]], seconds: float = 60) 
         if asyncio.get_running_loop().time() > deadline:
             pytest.fail("timed out waiting for Karakeep's background work")
         await asyncio.sleep(2)
+
+
+async def tagging_done(client: Client[Any], bid: str) -> None:
+    """So AI tags exist before the bookmark is deleted, and cleanup can remove them."""
+
+    async def done() -> bool:
+        got = await call(client, "get_bookmark", bookmark_id=bid, include_content=False)
+        return "tagging" not in got.get("pending", {})
+
+    await eventually(done, seconds=90)
 
 
 async def test_note_lifecycle(mcp_client: Client[Any]) -> None:
@@ -138,6 +166,7 @@ async def test_note_lifecycle(mcp_client: Client[Any]) -> None:
     assert (await call(mcp_client, "list_highlights", bookmark_id=bid))["highlights"] == []
     assert "highlights" in await call(mcp_client, "list_highlights", limit=1)
 
+    await tagging_done(mcp_client, bid)
     deleted = await call(mcp_client, "delete_bookmark", bookmark_id=bid)
     assert deleted == {"deleted": bid, "title": f"Renamed {RUN}"}
     gone = await mcp_client.call_tool("get_bookmark", {"bookmark_id": bid}, raise_on_error=False)
@@ -158,4 +187,5 @@ async def test_save_url_is_deduplicated(mcp_client: Client[Any]) -> None:
             return isinstance(got.get("content"), dict)
 
         await eventually(crawled, seconds=120)
+    await tagging_done(mcp_client, first["id"])
     await call(mcp_client, "delete_bookmark", bookmark_id=first["id"])

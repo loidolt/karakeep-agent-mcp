@@ -4,7 +4,8 @@
 
 Creates a note, a link bookmark, a tag and a list, then deletes the bookmarks.
 Tags and lists have no delete tools; with KARAKEEP_URL and KARAKEEP_API_KEY set
-the script removes them through the Karakeep API, otherwise it prints them.
+the script removes them (and tags Karakeep's AI attached during the run, once
+unused) through the Karakeep API, otherwise it prints them.
 """
 
 from __future__ import annotations
@@ -21,8 +22,31 @@ from fastmcp import Client
 from fastmcp.client.transports import StreamableHttpTransport
 
 
+def karakeep_api() -> httpx.AsyncClient | None:
+    base, key = os.environ.get("KARAKEEP_URL"), os.environ.get("KARAKEEP_API_KEY")
+    if not (base and key):
+        return None
+    return httpx.AsyncClient(
+        base_url=f"{base.rstrip('/')}/api/v1", headers={"Authorization": f"Bearer {key}"}
+    )
+
+
+async def tag_ids(http: httpx.AsyncClient) -> set[str]:
+    ids: set[str] = set()
+    cursor = None
+    while True:
+        params = {"limit": 200} | ({"cursor": cursor} if cursor else {})
+        page = (await http.get("/tags", params=params)).json()
+        ids |= {t["id"] for t in page["tags"]}
+        cursor = page.get("nextCursor")
+        if not cursor:
+            return ids
+
+
 async def main(url: str, token: str | None) -> None:
     run = uuid.uuid4().hex[:8]
+    api = karakeep_api()
+    tags_before = await tag_ids(api) if api else set()
     tag, list_name = f"mcp-smoke-{run}", f"MCP smoke {run}"
     headers = {"Authorization": f"Bearer {token}"} if token else None
     async with Client(StreamableHttpTransport(url, headers=headers)) as client:
@@ -66,22 +90,31 @@ async def main(url: str, token: str | None) -> None:
         await call("untag_bookmark", bookmark_id=link["id"], tags=[f"{tag}-b"])
         await call("remove_from_list", bookmark_id=link["id"], list=list_name)
         await call("list_highlights", limit=3)
+        # Let AI tagging finish so its tags exist (and can be cleaned up) before deleting.
+        for bid in (link["id"], note["id"]):
+            for _ in range(30):
+                got = await call("get_bookmark", bookmark_id=bid, include_content=False)
+                if "tagging" not in got.get("pending", {}):
+                    break
+                await asyncio.sleep(2)
         await call("delete_bookmark", bookmark_id=link["id"])
         await call("delete_bookmark", bookmark_id=note["id"])
         print("all tools ok")
 
-    base, key = os.environ.get("KARAKEEP_URL"), os.environ.get("KARAKEEP_API_KEY")
-    if not (base and key):
+    if api is None:
         print(f"left behind: tags {tag!r}, {tag + '-b'!r}; list {list_name!r}")
         return
-    async with httpx.AsyncClient(
-        base_url=f"{base.rstrip('/')}/api/v1", headers={"Authorization": f"Bearer {key}"}
-    ) as http:
-        for t in (await http.get("/tags", params={"nameContains": run})).json()["tags"]:
-            await http.delete(f"/tags/{t['id']}")
+    http = api
+    try:
+        for t in (await http.get("/tags", params={"limit": 200})).json()["tags"]:
+            new = t["id"] not in tags_before and t["numBookmarks"] == 0
+            if new or run in t["name"]:
+                await http.delete(f"/tags/{t['id']}")
         for lst in (await http.get("/lists")).json()["lists"]:
             if run in lst["name"]:
                 await http.delete(f"/lists/{lst['id']}")
+    finally:
+        await http.aclose()
     print("cleaned up tags and list")
 
 
