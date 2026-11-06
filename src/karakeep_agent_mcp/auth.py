@@ -60,6 +60,10 @@ def build_auth(settings: Settings) -> AuthProvider | None:
         base_url=settings.base_url,
         required_scopes=settings.oidc_scopes or None,
         verify_id_token=settings.oidc_verify_id_token,
+        # The provider is only used for login; this server issues its own tokens
+        # for the MCP resource. Forwarding the client's RFC 8707 `resource` makes
+        # strict providers (Pocket ID >= 2.19) reject the authorization request.
+        forward_resource=settings.oidc_forward_resource,
         algorithm=settings.oidc_algorithm,
         # OAuthProxy otherwise falls back to a year for API-key-style grants
         # without refresh tokens. An OIDC session needs a short expiry bound.

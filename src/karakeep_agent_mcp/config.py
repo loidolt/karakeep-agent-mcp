@@ -134,6 +134,9 @@ class Settings(BaseSettings):
     oidc_algorithm: Literal[
         "RS256", "RS384", "RS512", "ES256", "ES384", "ES512", "PS256", "PS384", "PS512", "EdDSA"
     ] = Field(default="RS256", validation_alias=_env("KARAKEEP_MCP_OIDC_ALGORITHM"))
+    oidc_forward_resource: bool = Field(
+        default=False, validation_alias=_env("KARAKEEP_MCP_OIDC_FORWARD_RESOURCE")
+    )
     oidc_allowed_client_redirect_uris: Annotated[list[str] | None, NoDecode] = Field(
         default=None, validation_alias=_env("KARAKEEP_MCP_OIDC_ALLOWED_CLIENT_REDIRECT_URIS")
     )

@@ -1,6 +1,6 @@
 [project]
 name = "karakeep-agent-mcp"
-version = "0.1.0"
+version = "0.1.1"
 description = "A curated, security-minded remote MCP server for Karakeep (bookmarks, read-later, notes)"
 readme = "README.md"
 license = "MIT"

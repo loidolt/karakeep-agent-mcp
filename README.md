@@ -140,6 +140,7 @@ All configuration is through environment variables. CLI flags (`--transport`, `-
 | `KARAKEEP_MCP_OIDC_AUDIENCE` | | `oidc`: `audience` parameter, for providers that need one |
 | `KARAKEEP_MCP_OIDC_VERIFY_ID_TOKEN` | `true` | `oidc`: verify ID tokens at login and on replacement; retain verified identity across refreshes that omit an ID token. `false` verifies access-token JWTs instead |
 | `KARAKEEP_MCP_OIDC_ALGORITHM` | `RS256` | `oidc`: expected JWT signing algorithm. Also supports RS384/512, ES256/384/512, PS256/384/512 and EdDSA; match the upstream client's configuration |
+| `KARAKEEP_MCP_OIDC_FORWARD_RESOURCE` | `false` | `oidc`: pass the MCP client's RFC 8707 `resource` on to the provider. Strict providers such as Pocket ID ≥ 2.19 reject unknown resources ("The 'resource' or 'scope' parameter is invalid"); set `true` only if your provider needs it to set the token audience |
 | `KARAKEEP_MCP_OIDC_ALLOWED_CLIENT_REDIRECT_URIS` | any | `oidc`: comma-separated patterns of MCP-client callback URLs allowed to register, e.g. `https://claude.ai/api/mcp/auth_callback,http://localhost:*` |
 | `KARAKEEP_MCP_JWT_SIGNING_KEY` | derived from client secret | `oidc`: key for the tokens this server issues to MCP clients |
 | `KARAKEEP_MCP_STATE_DIR` | FastMCP data dir (`/data`) | `oidc`: where client registrations and encrypted upstream tokens are stored. Persist it |
@@ -163,9 +164,9 @@ own and rotate them independently. All of them act as the `KARAKEEP_API_KEY` use
 
 In this mode the server is an OAuth authorization server for MCP clients (with dynamic
 client registration and a consent screen) and delegates the actual login to your OIDC
-provider through one pre-registered client. MCP clients never talk to the provider
-directly, so provider quirks around newer MCP OAuth parameters (such as Pocket ID
-rejecting the RFC 8707 `resource` parameter) don't matter.
+provider through one pre-registered client. The MCP client's RFC 8707 `resource`
+parameter is not passed on to the provider (Pocket ID 2.19+ rejects it), since this
+server issues its own tokens for the MCP endpoint.
 
 1. In your OIDC provider, create a **confidential** client (authorization code flow) with
    the redirect URI:
