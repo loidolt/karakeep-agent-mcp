@@ -190,17 +190,31 @@ def register_tools(
         mode: str = search_mode
         if sort != "relevance" and mode != "fts":
             mode = "fts"  # Karakeep orders semantic/hybrid results by relevance only
-        data = await client.get(
-            "/bookmarks/search",
-            params={
-                "q": query,
-                "searchMode": mode,
-                "sortOrder": {"relevance": "relevance", "newest": "desc", "oldest": "asc"}[sort],
-                "limit": limit,
-                "cursor": cursor,
-                "includeContent": False,
-            },
-        )
+
+        async def run(mode: str) -> Obj:
+            data: Obj = await client.get(
+                "/bookmarks/search",
+                params={
+                    "q": query,
+                    "searchMode": mode,
+                    "sortOrder": {"relevance": "relevance", "newest": "desc", "oldest": "asc"}[
+                        sort
+                    ],
+                    "limit": limit,
+                    "cursor": cursor,
+                    "includeContent": False,
+                },
+            )
+            return data
+
+        try:
+            data = await run(mode)
+        except KarakeepError as exc:
+            # Instances without an embedding model reject semantic and hybrid search.
+            if mode != "hybrid" or exc.status != 400 or "semantic" not in str(exc).lower():
+                raise
+            mode = "fts"
+            data = await run(mode)
         out = page(data)
         if mode != search_mode:
             out["search_mode"] = mode
@@ -534,4 +548,5 @@ def register_tools(
         with the user first."""
         b = await fetch_bookmark(bookmark_id)
         await client.delete(f"/bookmarks/{_seg(b['id'], 'bookmark_id')}")
-        return trim.compact({"deleted": b.get("id"), "title": trim.title_of(b)})
+        label = trim.title_of(b) or trim.truncate((b.get("content") or {}).get("text"), 80)
+        return trim.compact({"deleted": b.get("id"), "title": label})

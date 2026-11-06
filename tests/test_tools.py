@@ -617,3 +617,31 @@ async def test_public_url_used_for_links(
     async with Client(server_factory(karakeep_public_url="https://keep.example.com")) as c:
         result = await call(c, "list_bookmarks")
     assert result["bookmarks"][0]["link"] == "https://keep.example.com/dashboard/preview/b1"
+
+
+async def test_hybrid_falls_back_without_embeddings(
+    client: Client[Any], karakeep: respx.Router
+) -> None:
+    route = karakeep.get("/bookmarks/search").mock(
+        side_effect=[
+            httpx.Response(
+                400, json={"code": "BAD_REQUEST", "message": "Semantic search is not enabled"}
+            ),
+            httpx.Response(200, json={"bookmarks": [], "nextCursor": None}),
+        ]
+    )
+    assert await call(client, "search_bookmarks", query="x") == {
+        "bookmarks": [],
+        "search_mode": "fts",
+    }
+    assert [c.request.url.params["searchMode"] for c in route.calls] == ["hybrid", "fts"]
+
+
+async def test_semantic_without_embeddings_is_an_error(
+    client: Client[Any], karakeep: respx.Router
+) -> None:
+    karakeep.get("/bookmarks/search").respond(
+        400, json={"code": "BAD_REQUEST", "message": "Semantic search is not enabled"}
+    )
+    result = await call(client, "search_bookmarks", query="x", search_mode="semantic")
+    assert "Semantic search is not enabled" in result["error"]

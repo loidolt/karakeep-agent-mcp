@@ -1,0 +1,58 @@
+# Throwaway Karakeep for local development and integration tests.
+#   docker compose -f dev/compose.yaml up -d --wait karakeep
+#   uv run python dev/bootstrap_karakeep.py   # creates a user and API key, prints env vars
+# The mcp service runs this server in bearer mode against it:
+#   docker compose -f dev/compose.yaml --profile mcp up -d --build
+# No crawler browser and no AI: links are fetched without screenshots, nothing
+# is auto-tagged, and search_mode=semantic is unavailable.
+name: karakeep-agent-mcp-dev
+
+services:
+  karakeep:
+    image: ghcr.io/karakeep-app/karakeep:${KARAKEEP_VERSION:-0.34.1}
+    ports:
+      - "127.0.0.1:3010:3000"
+    tmpfs:
+      - /data
+    environment:
+      DATA_DIR: /data
+      NEXTAUTH_URL: http://localhost:3010
+      NEXTAUTH_SECRET: dev-only-nextauth-secret-change-me
+      MEILI_ADDR: http://meilisearch:7700
+      MEILI_MASTER_KEY: dev-only-meili-master-key
+      DISABLE_NEW_RELEASE_CHECK: "true"
+      TZ: UTC
+    depends_on:
+      meilisearch:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:3000/api/health"]
+      interval: 5s
+      timeout: 5s
+      retries: 40
+
+  meilisearch:
+    image: getmeili/meilisearch:v1.55.0
+    environment:
+      MEILI_NO_ANALYTICS: "true"
+      MEILI_MASTER_KEY: dev-only-meili-master-key
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:7700/health"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+
+  mcp:
+    profiles: [mcp]
+    build: ..
+    depends_on:
+      karakeep:
+        condition: service_healthy
+    ports:
+      - "127.0.0.1:${MCP_HOST_PORT:-8000}:8000"
+    environment:
+      KARAKEEP_URL: http://karakeep:3000
+      KARAKEEP_PUBLIC_URL: http://localhost:3010
+      KARAKEEP_API_KEY: ${KARAKEEP_API_KEY:-}
+      KARAKEEP_MCP_AUTH_MODE: bearer
+      KARAKEEP_MCP_BEARER_TOKENS: ${KARAKEEP_MCP_BEARER_TOKENS:-dev-token-change-me}
